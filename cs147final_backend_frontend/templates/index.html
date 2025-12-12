@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Smart Curtain Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: system-ui, Arial; max-width: 900px; margin: 24px auto; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap: 12px; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 12px; }
+    button { padding: 8px 14px; margin-right: 8px; border-radius: 8px; border: 1px solid #999; cursor: pointer; }
+    .muted { color:#777; font-size: 0.92em; }
+    #status { margin-top:8px; font-weight:600; }
+  </style>
+</head>
+<body>
+  <h1>🌞 Smart Curtain</h1>
+
+  <div class="cards">
+    <div class="card">
+      <h3>Live Readings</h3>
+      <div>Temperature: <b id="temp">--</b> °C</div>
+      <div>Humidity: <b id="hum">--</b> %</div>
+      <div>LDR: <b id="ldr">--</b></div>
+      <div class="muted">Updated: <span id="time">--</span></div>
+      <button id="btn-refresh" onclick="refreshAll()">🔄 Refresh All</button>
+      <div class="muted" id="lastref">Last refreshed: --</div>
+    </div>
+
+    <div class="card">
+      <h3>Controls</h3>
+      <button onclick="sendCmd('OPEN')">Open</button>
+      <button onclick="sendCmd('CLOSE')">Close</button>
+      <button onclick="sendCmd('AUTO')">Auto</button>
+      <div id="status" class="muted">Idle</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:12px;">
+    <h3>History (last 60 points)</h3>
+    <canvas id="chart" height="100" style="margin-top:8px;"></canvas>
+  </div>
+
+  <script>
+    let chart = null;
+
+    // Combined refresh button for live + history
+    async function refreshAll() {
+      const btn = document.getElementById('btn-refresh');
+      btn.disabled = true;
+      btn.textContent = "⏳ Refreshing...";
+      try {
+        await refreshLive();
+        await loadHistory();
+        document.getElementById('lastref').textContent =
+          "Last refreshed: " + new Date().toLocaleTimeString();
+      } catch (e) {
+        console.error(e);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "🔄 Refresh All";
+      }
+    }
+
+    // Load live sensor data
+    async function refreshLive() {
+      const r = await fetch('/api/latest');
+      const j = await r.json();
+      if (!j.error) {
+        document.getElementById('temp').textContent = j.temperature ?? '--';
+        document.getElementById('hum').textContent  = j.humidity ?? '--';
+        document.getElementById('ldr').textContent  = j.ldr ?? '--';
+        document.getElementById('time').textContent = j.time ?? '--';
+      }
+    }
+
+    // Send control command
+    async function sendCmd(cmd) {
+      const status = document.getElementById('status');
+      status.textContent = "Sending " + cmd + "...";
+      try {
+        const r = await fetch('/api/command', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({cmd})
+        });
+        const j = await r.json();
+        status.textContent = j.ok
+          ? "✅ Command sent (entry " + j.entry_id + ")"
+          : "❌ Failed: " + (j.error || "ThingSpeak");
+      } catch (e) {
+        status.textContent = "❌ Network error";
+      } finally {
+        setTimeout(()=>{ status.textContent = "Idle"; }, 4000);
+      }
+    }
+
+    // Load and render history chart
+    async function loadHistory() {
+      const r = await fetch('/api/history');
+      const data = await r.json();
+
+      const labels = data.map(d => d.t);
+      const temp = data.map(d => d.temp);
+      const hum  = data.map(d => d.hum);
+      const ldr  = data.map(d => d.ldr);
+
+      const ctx = document.getElementById('chart').getContext('2d');
+      if (chart) {
+        chart.destroy();  // completely destroy old chart (stops auto updates)
+        chart = null;
+      }
+
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: [...labels], // copy arrays to prevent reactive updates
+          datasets: [
+            { label:'Temp °C', data:[...temp], yAxisID:'y1', borderColor:'red' },
+            { label:'Humidity %', data:[...hum], yAxisID:'y2', borderColor:'blue' },
+            { label:'LDR', data:[...ldr], yAxisID:'y3', borderColor:'green' }
+          ]
+        },
+        options: {
+          responsive: true,
+          animation: false,
+          interaction: { mode: 'index', intersect: false },
+          stacked: false,
+          scales: {
+            y1:{ position:'left', suggestedMin:0, suggestedMax:40 },
+            y2:{ position:'right', suggestedMin:0, suggestedMax:100, grid:{drawOnChartArea:false} },
+            y3:{ position:'right', suggestedMin:0, suggestedMax:4095, grid:{drawOnChartArea:false} }
+          }
+        }
+      });
+    }
+
+    // No auto-refresh anywhere — only manual click
+  </script>
+</body>
+</html>
